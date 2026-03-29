@@ -40,7 +40,6 @@ from sklearn.metrics import (
 )
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
-from sklearn.decomposition import PCA
 
 try:
     from xgboost import XGBClassifier
@@ -58,9 +57,9 @@ DEFAULT_TRAIN_FRACTION = 0.70
 DEFAULT_VAL_FRACTION = 0.15
 DEFAULT_MAX_TRAIN_ROWS = 0
 DEFAULT_BETA = 2.0
-DEFAULT_PLOT_PR_CURVES = False
+DEFAULT_PLOT_PR_CURVES = True
 DEFAULT_PLOT_OUTPUT_DIR = "plots"
-DEFAULT_SHOW_PR_CURVES = False
+DEFAULT_SHOW_PR_CURVES = True
 
 # Tunable feature/config settings.
 DEFAULT_SENSOR_COLS = ("S5", "S8", "S13", "S15", "S16", "S17", "S18", "S19")
@@ -69,7 +68,7 @@ DEFAULT_ROLLING_MIN_PERIODS = 2
 
 # Tunable model selection/settings.
 # Allowed values: "logreg", "rf", "hgb", "xgb", "lgbm", "calibrated_best"
-DEFAULT_MODEL_TYPE = "rf"
+DEFAULT_MODEL_TYPE = "hgb"
 MODEL_TYPE_CHOICES = ("logreg", "rf", "hgb", "xgb", "lgbm", "calibrated_best")
 
 # Logistic Regression settings
@@ -272,7 +271,7 @@ def fit_selected_model(
 ) -> tuple[str, np.ndarray, np.ndarray]:
     if model_type != "calibrated_best":
         model_name, clf = _create_base_estimator(model_type)
-        pipe = Pipeline(steps=[("pre", pre), ("pca", PCA(n_components=0.95, random_state=42)), ("clf", clf)])
+        pipe = Pipeline(steps=[("pre", pre), ("clf", clf)])
         pipe.fit(X_train, y_train)
         return model_name, pipe.predict_proba(X_val)[:, 1], pipe.predict_proba(X_test)[:, 1]
 
@@ -287,7 +286,7 @@ def fit_selected_model(
     best_ap = -np.inf
     for candidate in candidates:
         _, base_est = _create_base_estimator(candidate)
-        base_pipe = Pipeline(steps=[("pre", pre), ("pca", PCA(n_components=0.95, random_state=42)), ("clf", base_est)])
+        base_pipe = Pipeline(steps=[("pre", pre), ("clf", base_est)])
         base_pipe.fit(X_train, y_train)
         val_scores = base_pipe.predict_proba(X_val)[:, 1]
         ap = average_precision_score(y_val, val_scores)
@@ -304,7 +303,7 @@ def fit_selected_model(
         method=DEFAULT_CALIBRATION_METHOD,
         cv=DEFAULT_CALIBRATION_CV,
     )
-    calibrated_pipe = Pipeline(steps=[("pre", pre), ("pca", PCA(n_components=0.95, random_state=42)), ("clf", calibrated)])
+    calibrated_pipe = Pipeline(steps=[("pre", pre), ("clf", calibrated)])
     calibrated_pipe.fit(X_train, y_train)
     display_name = f"{DEFAULT_CALIBRATED_BEST_NAME}({best_name})"
     return display_name, calibrated_pipe.predict_proba(X_val)[:, 1], calibrated_pipe.predict_proba(X_test)[:, 1]
