@@ -44,6 +44,8 @@ from sklearn.decomposition import PCA
 from tqdm import tqdm
 import itertools
 import random
+import seaborn as sns
+from sklearn.metrics import confusion_matrix
 
 try:
     from xgboost import XGBClassifier
@@ -100,9 +102,9 @@ DEFAULT_HGB_RANDOM_STATE = 42
 
 # XGBoost settings (requires xgboost package)
 DEFAULT_XGB_NAME = "XGBoost"
-DEFAULT_XGB_N_ESTIMATORS = 703 #350 #261, 69, 703
-DEFAULT_XGB_MAX_DEPTH = 15 #6 #11, 15, 15
-DEFAULT_XGB_LEARNING_RATE = 0.06 #0.05 #0.005, 0.11499999, 0.06
+DEFAULT_XGB_N_ESTIMATORS = 261 #350 #261, 69, 703
+DEFAULT_XGB_MAX_DEPTH = 10 #6 #11, 15, 15
+DEFAULT_XGB_LEARNING_RATE = 0.002 #0.05 #0.005, 0.11499999, 0.06
 DEFAULT_XGB_SUBSAMPLE = 0.85
 DEFAULT_XGB_COLSAMPLE_BYTREE = 0.85
 DEFAULT_XGB_REG_LAMBDA = 1.0
@@ -191,6 +193,7 @@ class BinaryResult:
     alert_rate: float
 
 
+
 @dataclass
 class CurvePayload:
     task: str
@@ -198,6 +201,7 @@ class CurvePayload:
     y_true: np.ndarray
     baseline_scores: np.ndarray
     model_scores: np.ndarray
+    y_pred: np.ndarray
 
 
 def _is_model_available(model_type: str) -> bool:
@@ -440,7 +444,36 @@ def save_precision_recall_curves(curves: list[CurvePayload], output_dir: str, sh
             plt.show()
         plt.close()
 
-    print(f"\nSaved PR curves to: {out_dir.resolve()}")
+        cm = confusion_matrix(curve.y_true, curve.y_pred)
+
+        # Normalize (choose one)
+        cm_norm = cm / cm.sum()  # global normalization
+        # OR:
+        # cm_norm = cm / cm.sum(axis=1, keepdims=True)  # row-wise
+
+        plt.figure(figsize=(6, 5))
+        sns.heatmap(
+            cm_norm,
+            annot=True,
+            fmt=".3f",
+            cmap="Blues",
+            xticklabels=["Pred 0", "Pred 1"],
+            yticklabels=["True 0", "True 1"]
+        )
+
+        plt.title(f"{curve.task}: Confusion Matrix (Normalized)")
+        plt.xlabel("Predicted")
+        plt.ylabel("Actual")
+
+        out_path_cm = out_dir / f"confusion_matrix_{curve.task.lower()}.png"
+        plt.tight_layout()
+        plt.savefig(out_path_cm, dpi=150)
+
+        if show_plots:
+            plt.show()
+        plt.close()
+
+    print(f"\nSaved PR curves and Confusion Matrix to: {out_dir.resolve()}")
 
 
 def build_true_horizon_class(rul_days: np.ndarray) -> np.ndarray:
@@ -718,7 +751,7 @@ def main() -> None:
         results.append(
             evaluate_binary(task_name, model_display_name, y_test, test_score_model, thr_model, beta=beta_task)
         )
-
+        y_pred_test = (test_score_model >= thr_model).astype(int)
         curve_payloads.append(
             CurvePayload(
                 task=task_name,
@@ -726,6 +759,7 @@ def main() -> None:
                 y_true=y_test,
                 baseline_scores=test_score_base,
                 model_scores=test_score_model,
+                y_pred=y_pred_test
             )
         )
     out = pd.DataFrame([r.__dict__ for r in results])
