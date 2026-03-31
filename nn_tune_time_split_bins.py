@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import random
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -58,7 +60,7 @@ DEFAULT_VAL_FRACTION = 0.15
 DEFAULT_MAX_TRAIN_ROWS = 0
 
 # Bin cutoffs for one-vs-rest tasks.
-BIN_MAX_DAYS = (0,)
+BIN_MAX_DAYS = (30,)
 
 # Threshold tuning metric.
 GLOBAL_BETA = 2.0
@@ -66,7 +68,7 @@ USE_TASK_SPECIFIC_BETA = True
 TASK_BETA = {
     "LE_0_DAYS": 3.0,
     "LE_7_DAYS": 1.5,
-    "LE_30_DAYS": 0.8,
+    "LE_30_DAYS": 0.5,
 }
 
 # Selection metric for tuning: "pr_auc" or "fbeta".
@@ -88,21 +90,21 @@ PCA_N_COMPONENTS = 0.95
 # ========================================================
 NN_PARAM_GRID = [
     {
-        "lstm_units": 64,
-        "lstm_layers": 1,
-        "dropout_after_lstm": 0.4,
-        "dense_units": 32,
-        "l2_reg": 0.001,
-        "batch_size": 32,
-        "learning_rate": 0.0005,
+        "lstm_units": 128,
+        "lstm_layers": 2,
+        "dropout_after_lstm": 0.2,
+        "dense_units": 16,
+        "l2_reg": 0.0003,
+        "batch_size": 64,
+        "learning_rate": 0.001,
         "epochs": 120,
     }
 ]
 
 # LSTM-specific training settings (shared across all configs).
-SEQUENCE_LENGTH = 10  # Look-back window (10 time steps).
-EARLY_STOPPING_PATIENCE = 8
-REDUCE_LR_PATIENCE = 4
+SEQUENCE_LENGTH = 15  # Look-back window (10 time steps).
+EARLY_STOPPING_PATIENCE = 12
+REDUCE_LR_PATIENCE = 8
 REDUCE_LR_FACTOR = 0.5
 # Keras training verbosity: 0=silent, 1=progress bar, 2=one line per epoch.
 TRAIN_FIT_VERBOSE = 1
@@ -130,6 +132,10 @@ SHOW_LEARNING_CURVES = False
 # Append-only experiment log.
 SAVE_EXPERIMENT_LOG = True
 EXPERIMENT_LOG_PATH = "experiments/nn_tuning_results.csv"
+
+# Save best model artifacts.
+SAVE_BEST_MODEL = True
+MODEL_OUTPUT_DIR = "models/nn_best"
 
 RANDOM_STATE = 42
 
@@ -517,6 +523,32 @@ def append_experiment_log(
     return run_id, str(log_path.resolve())
 
 
+def _set_seed(seed: int, deterministic: bool = True) -> None:
+    """Set random seeds for reproducible results.
+    
+    Args:
+        seed: Random seed value
+        deterministic: If False, skips TF GPU determinism flags (better performance, less stable across runs)
+    
+    Controls randomness in:
+    - Python's random module
+    - NumPy
+    - TensorFlow/Keras (including GPU operations and dropout)
+    """
+    os.environ["PYTHONHASHSEED"] = str(seed)
+    random.seed(seed)
+    np.random.seed(seed)
+    tf.random.set_seed(seed)
+    # Enable deterministic GPU operations for reproducible results
+    # Disable if --stochastic for better performance at cost of variance
+    if deterministic:
+        os.environ["TF_DETERMINISTIC_OPS"] = "1"
+        os.environ["TF_CUDNN_DETERMINISTIC"] = "1"
+    else:
+        os.environ.pop("TF_DETERMINISTIC_OPS", None)
+        os.environ.pop("TF_CUDNN_DETERMINISTIC", None)
+
+
 def main() -> None:
     _check_tf()
 
@@ -545,7 +577,24 @@ def main() -> None:
     parser.add_argument("--stage-a-early-stopping-patience", type=int, default=STAGE_A_EARLY_STOPPING_PATIENCE)
     parser.add_argument("--stage-a-reduce-lr-patience", type=int, default=STAGE_A_REDUCE_LR_PATIENCE)
     parser.add_argument("--stage-a-seed", type=int, default=RANDOM_STATE)
+    parser.add_argument(
+        "--stochastic",
+        action="store_true",
+        help="Disable deterministic GPU ops for better performance (less consistent across runs).",
+    )
     args = parser.parse_args()
+
+    # Apply deterministic seeding (disabled with --stochastic for better performance)
+    _set_seed(RANDOM_STATE, deterministic=not args.stochastic)
+
+    if args.stochastic:
+        print("[INFO] Running in stochastic mode (non-deterministic GPU ops for better performance)")
+
+    run_stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    model_run_dir: Path | None = None
+    if SAVE_BEST_MODEL:
+        model_run_dir = Path(MODEL_OUTPUT_DIR) / run_stamp
+        model_run_dir.mkdir(parents=True, exist_ok=True)
 
     effective_param_grid = NN_PARAM_GRID
     effective_early_stopping_patience = EARLY_STOPPING_PATIENCE
@@ -672,6 +721,7 @@ def main() -> None:
         )
 
         best_result: TuneResult | None = None
+        best_model = None
 
         for idx, params in enumerate(effective_param_grid, start=1):
             print(f"  Config {idx:02d}/{len(effective_param_grid)}...", end="", flush=True)
@@ -711,6 +761,7 @@ def main() -> None:
                 batch_size=params["batch_size"],
                 callbacks=[early_stop, reduce_lr],
                 verbose=TRAIN_FIT_VERBOSE,
+                shuffle=False,  # Deterministic batch ordering
             )
 
             if PLOT_LEARNING_CURVES:
@@ -749,6 +800,7 @@ def main() -> None:
 
             if best_result is None or row.val_metric > best_result.val_metric:
                 best_result = row
+                best_model = model
 
         if best_result is None:
             raise RuntimeError(f"No successful NN config for task {task_name}")
@@ -764,6 +816,28 @@ def main() -> None:
             f"    params: lstm_units={best_result.params['lstm_units']}, lstm_layers={best_result.params['lstm_layers']}, "
             f"lr={best_result.params['learning_rate']}, batch_size={best_result.params['batch_size']}"
         )
+
+        if SAVE_BEST_MODEL and best_model is not None and model_run_dir is not None:
+            model_path = model_run_dir / f"best_model_{task_name.lower()}.keras"
+            metadata_path = model_run_dir / f"best_model_{task_name.lower()}_metadata.json"
+
+            best_model.save(model_path)
+
+            metadata = {
+                "task": task_name,
+                "run_stamp": run_stamp,
+                "selection_metric": args.metric,
+                "beta_task": beta_task,
+                "threshold": float(best_result.threshold),
+                "val_metric": float(best_result.val_metric),
+                "params": best_result.params,
+                "sequence_length": args.sequence_length,
+                "bins": [d for _, d in task_definitions],
+            }
+            metadata_path.write_text(json.dumps(metadata, indent=2, sort_keys=True), encoding="utf-8")
+
+            print(f"    saved model: {model_path.resolve()}")
+            print(f"    saved metadata: {metadata_path.resolve()}")
 
     out = pd.DataFrame([r.__dict__ for r in all_rows])
     summary = out.sort_values(["task", "val_metric"], ascending=[True, False]).groupby("task", as_index=False).head(1)

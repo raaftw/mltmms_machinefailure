@@ -1,0 +1,22 @@
+{
+  "beta_task": 3.0,
+  "bins": [
+    0
+  ],
+  "params": {
+    "batch_size": 64,
+    "dense_units": 16,
+    "dropout_after_lstm": 0.2,
+    "epochs": 120,
+    "l2_reg": 0.0003,
+    "learning_rate": 0.001,
+    "lstm_layers": 2,
+    "lstm_units": 128
+  },
+  "run_stamp": "20260329T163838154221Z",
+  "selection_metric": "pr_auc",
+  "sequence_length": 10,
+  "task": "LE_0_DAYS",
+  "threshold": 0.033341579139232635,
+  "val_metric": 0.18726715749701822
+}

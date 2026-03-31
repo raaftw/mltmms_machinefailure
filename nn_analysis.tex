@@ -1,0 +1,11 @@
+\documentclass[11pt]{article}
+\usepackage{amsmath}
+\usepackage{amssymb}
+
+\begin{document}
+
+\section*{Why Neural Networks Failed on This Task: Evidence from Our Experiments}
+
+During tuning, we observed that neural networks are fundamentally unsuitable for this equipment failure prediction task. Running the same LSTM configuration on identical data produced wildly inconsistent results: validation PR-AUC swung from $0.02$ to $0.22$, and more critically for our use case, test recall varied from $0.33$ to $0.56$ on the same holdout test set. The culprit is the extreme class imbalance: only $30$ positive examples exist in a validation set of $22{,}478$ samples (0.13\%). With so few failure cases, each positive example has outsized influence on the learned decision boundary. A small shift in weight initialization or GPU randomness causes the model to pick a different threshold, transforming test recall from $55\%$ to $33\%$---unacceptable for safety-critical failure detection. When we added deterministic seeding to stabilize results, performance degraded further (validation PR-AUC dropped to $\approx 0.02$, test recall $\approx 0.21$), demonstrating the fundamental mismatch: either accept unreliable outputs or sacrifice model quality. High recall is essential for our application, yet neural networks cannot deliver both stability \textit{and} recall with this imbalanced dataset. In contrast, tree-based models (XGBoost, Random Forests) naturally handle extreme imbalance through weighted class handling and produce stable, interpretable thresholds that do not require sacrificing performance for reproducibility.
+
+\end{document}
