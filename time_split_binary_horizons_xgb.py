@@ -672,6 +672,9 @@ def main() -> None:
     param_grid = random.sample(param_grid, 300)  # instead of 2000
 
     for task_name, max_days in task_definitions:
+        #"""
+        #Optimization algorithm
+        #"""
         # best_val_score = -1
         # best_lr = None
         # best_er = None
